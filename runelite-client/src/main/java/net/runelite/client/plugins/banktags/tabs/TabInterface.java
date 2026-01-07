@@ -566,9 +566,24 @@ public class TabInterface
 			while (dataIter.hasNext())
 			{
 				final int idx = Integer.parseInt(dataIter.next());
-				final int itemId = Integer.parseInt(dataIter.next());
-				l.setItemAtPos(itemId, idx);
-				tagManager.addTag(itemId, name, false);
+				final String token = dataIter.next();
+				if (token.indexOf('|') != -1)
+				{
+					String[] parts = token.split("\\|");
+					int[] ids = new int[parts.length];
+					for (int i = 0; i < parts.length; ++i)
+					{
+						ids[i] = Integer.parseInt(parts[i]);
+						tagManager.addTag(ids[i], name, false);
+					}
+					l.setItemsAtPos(ids, idx);
+				}
+				else
+				{
+					final int itemId = Integer.parseInt(token);
+					l.setItemAtPos(itemId, idx);
+					tagManager.addTag(itemId, name, false);
+				}
 			}
 
 			layoutManager.saveLayout(l);
@@ -744,13 +759,30 @@ public class TabInterface
 				if (layout != null)
 				{
 					data.add("layout");
-					int[] l = layout.getLayout();
+					int[][] l = layout.getLayout();
 					for (int idx = 0; idx < l.length; ++idx)
 					{
-						if (l[idx] != -1)
+						int[] ids = l[idx];
+						if (ids != null)
 						{
 							data.add(String.valueOf(idx));
-							data.add(String.valueOf(l[idx]));
+							if (ids.length == 1)
+							{
+								data.add(String.valueOf(ids[0]));
+							}
+							else
+							{
+								StringBuilder sb = new StringBuilder();
+								for (int j = 0; j < ids.length; ++j)
+								{
+									if (j > 0)
+									{
+										sb.append('|');
+									}
+									sb.append(ids[j]);
+								}
+								data.add(sb.toString());
+							}
 						}
 					}
 				}
