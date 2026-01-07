@@ -166,8 +166,41 @@ public class RuneLite
 	@Inject
 	private ScheduledExecutorService scheduledExecutorService;
 
+	private static String[] stripLauncherJvmArgs(String[] args) // to stop bolt launcher from crashing
+	{
+		List<String> out = new ArrayList<>(args.length);
+
+		for (int i = 0; i < args.length; i++)
+		{
+			String a = args[i];
+
+			// Pattern 1: "-J" "<realJvmArg>"
+			if ("-J".equals(a))
+			{
+				// skip next token too (the actual JVM arg)
+				if (i + 1 < args.length)
+				{
+					i++;
+				}
+				continue;
+			}
+
+			// Pattern 2: "-J<realJvmArg>"
+			if (a.startsWith("-J"))
+			{
+				continue;
+			}
+
+			out.add(a);
+		}
+
+		return out.toArray(new String[0]);
+	}
+
 	public static void main(String[] args) throws Exception
 	{
+		System.setProperty("runelite.pluginhub.version", "1.12.10"); // since we cant pass args through bolt
+		args = stripLauncherJvmArgs(args);
 		Locale.setDefault(Locale.ENGLISH);
 
 		final OptionParser parser = new OptionParser(false);
