@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -259,8 +260,33 @@ public class LayoutManager
 		int[][] layout = l.getLayout();
 		Set<Integer> bankItemsAll = new LinkedHashSet<>(bankItems);
 
-		Map<Integer, Integer> realMatchCache = new HashMap<>();
-		Map<Integer, Integer> placeholderMatchCache = new HashMap<>();
+		// If the layout contains multiple items from the same variation group (eg different doses/charges
+		// laid out separately), do not treat those variations as interchangeable.
+		Map<Integer, Integer> baseCounts = new HashMap<>();
+		for (int[] candidates : layout)
+		{
+			if (candidates == null)
+			{
+				continue;
+			}
+
+			for (int cand : candidates)
+			{
+				int baseId = ItemVariationMapping.map(cand);
+				baseCounts.merge(baseId, 1, Integer::sum);
+			}
+		}
+		Set<Integer> strictVariationBases = new HashSet<>();
+		for (Map.Entry<Integer, Integer> e : baseCounts.entrySet())
+		{
+			if (e.getValue() > 1)
+			{
+				strictVariationBases.add(e.getKey());
+			}
+		}
+
+		Map<Long, Integer> realMatchCache = new HashMap<>();
+		Map<Long, Integer> placeholderMatchCache = new HashMap<>();
 
 		// Items from the layout
 		for (int pos = 0; pos < layout.length; ++pos)
@@ -283,7 +309,9 @@ public class LayoutManager
 			int selected = -1;
 			for (int cand : candidates)
 			{
-				int matched = realMatchCache.computeIfAbsent(cand, k -> matchReal(bankItemsAll, k));
+				boolean strict = strictVariationBases.contains(ItemVariationMapping.map(cand));
+				long key = cacheKey(cand, strict);
+				int matched = realMatchCache.computeIfAbsent(key, k -> matchReal(bankItemsAll, cand, strict));
 				if (matched != -1)
 				{
 					selected = matched;
@@ -312,7 +340,9 @@ public class LayoutManager
 			for (int i = candidates.length - 1; i >= 0; --i)
 			{
 				int cand = candidates[i];
-				int matched = placeholderMatchCache.computeIfAbsent(cand, k -> matchAnyPlaceholder(bankItemsAll, k));
+				boolean strict = strictVariationBases.contains(ItemVariationMapping.map(cand));
+				long key = cacheKey(cand, strict);
+				int matched = placeholderMatchCache.computeIfAbsent(key, k -> matchAnyPlaceholder(bankItemsAll, cand, strict));
 				if (matched != -1)
 				{
 					selectedPlaceholder = matched;
@@ -332,8 +362,9 @@ public class LayoutManager
 			}
 			else
 			{
-				// No bank placeholders exist; show a layout placeholder for the lowest-priority item.
-				drawItem(l, c, bank, candidates[candidates.length - 1], pos);
+				// No bank placeholders exist; show a layout placeholder for the highest-priority item.
+				// (Reverse-priority display is reserved for real in-bank (Jagex) placeholders.)
+				drawItem(l, c, bank, candidates[0], pos);
 			}
 		}
 
@@ -543,39 +574,45 @@ public class LayoutManager
 				return;
 			}
 
-			int itemId = itemManager.canonicalize(srcItem);
-			if (itemId == -1)
-			{
-				return;
-			}
-
 			if (tidx >= l.size() || sidx >= l.size())
 			{
 				l.resize(Math.max(sidx, tidx) + 1);
 			}
 
 			// Shift+drag is for editing candidate lists:
-			// - Dropping onto an occupied slot inserts the item just before the currently shown candidate.
-			// - Dropping onto an empty slot extracts/moves the item out into its own slot.
+			// - Always interact with the highest-priority (front) candidate of a slot.
+			// - Dropping onto an occupied slot inserts/moves the item to the front of the target list.
+			// - Dropping onto an empty slot extracts/moves the front candidate out into its own slot.
 			int[] targetCandidates = l.getItemsAtPos(tidx);
 			if (targetCandidates == null)
 			{
-				log.debug("Extract/move {} from {} -> {}", itemId, sidx, tidx);
-				l.removeItemFromPos(itemId, sidx);
-				l.setItemAtPos(itemId, tidx);
+				// Shift+drag out always extracts the highest-priority (front) candidate from the source slot,
+				// even if that candidate is not currently being displayed.
+				int extracted = l.getItemAtPos(sidx);
+				if (extracted == -1)
+				{
+					return;
+				}
+				log.debug("Extract/move highest-priority {} from {} -> {}", extracted, sidx, tidx);
+				l.removeItemFromPos(extracted, sidx);
+				l.setItemAtPos(extracted, tidx);
 			}
 			else
 			{
+				int itemId = itemManager.canonicalize(srcItem);
+				if (itemId == -1)
+				{
+					return;
+				}
+
 				// When inserting into a candidate list, treat this as a move: remove the item from its
 				// original slot so it doesn't remain as a separate entry elsewhere in the layout.
 				if (sidx != tidx)
 				{
 					l.removeItemFromPos(itemId, sidx);
 				}
-
-				int activeIdx = activeCandidateIndex(targetCandidates, target.getItemId());
-				log.debug("Insert {} into candidate list at {} before idx {}", itemId, tidx, activeIdx);
-				l.insertItemBeforeIndexAtPos(itemId, tidx, activeIdx);
+				log.debug("Insert/move {} to front of candidate list at {}", itemId, tidx);
+				l.addItemToFrontAtPos(itemId, tidx);
 			}
 			saveLayout(l);
 			bankSearch.layoutBank();
@@ -610,62 +647,15 @@ public class LayoutManager
 		int match(Set<Integer> bank, int itemId);
 	}
 
-	/**
-	 * Determine which candidate is currently being shown in a slot.
-	 *
-	 * This is used for Shift+drag insertions, so the new item is inserted just before
-	 * the candidate the user is actually seeing (eg, inserting into {@code 1|2|3}
-	 * while {@code 2} is shown results in {@code 1|NEW|2|3}).
-	 */
-	private int activeCandidateIndex(int[] candidates, int shownItemId)
-	{
-		if (candidates.length == 0)
-		{
-			return 0;
-		}
-
-		// Try to map the shown widget item id back to the candidate index.
-		// The shown id may be an exact id, a variant id, or a placeholder id.
-		int canonicalShown = itemManager.canonicalize(shownItemId);
-		for (int i = 0; i < candidates.length; ++i)
-		{
-			int cand = candidates[i];
-			if (cand == shownItemId || cand == canonicalShown)
-			{
-				return i;
-			}
-
-			// Placeholder for the exact candidate.
-			ItemComposition comp = itemManager.getItemComposition(cand);
-			if (comp.getPlaceholderId() != -1 && comp.getPlaceholderId() == shownItemId)
-			{
-				return i;
-			}
-
-			// Variants and their placeholders.
-			int base = ItemVariationMapping.map(cand);
-			for (int variationId : ItemVariationMapping.getVariations(base))
-			{
-				if (variationId == shownItemId || variationId == canonicalShown)
-				{
-					return i;
-				}
-				ItemComposition vcomp = itemManager.getItemComposition(variationId);
-				int placeholderId = vcomp.getPlaceholderId();
-				if (placeholderId != -1 && placeholderId == shownItemId)
-				{
-					return i;
-				}
-			}
-		}
-
-		// Fallback: assume the lowest-priority candidate is the one being shown.
-		return candidates.length - 1;
-	}
 
 	private int matchExact(Set<Integer> bank, int itemId)
 	{
 		return bank.contains(itemId) ? itemId : -1;
+	}
+
+	private static long cacheKey(int itemId, boolean strict)
+	{
+		return ((long) itemId << 1) | (strict ? 1L : 0L);
 	}
 
 	private int matchPlaceholder(Set<Integer> bank, int itemId)
@@ -679,31 +669,8 @@ public class LayoutManager
 		return -1;
 	}
 
-	private int matchesVariant(Set<Integer> bank, int itemId)
-	{
-		int baseId = ItemVariationMapping.map(itemId);
-		if (baseId != itemId)
-		{
-			for (int variationId : ItemVariationMapping.getVariations(baseId))
-			{
-				if (bank.contains(variationId))
-				{
-					return variationId;
-				}
 
-				ItemComposition config = itemManager.getItemComposition(variationId);
-				int placeholderId = config.getPlaceholderId();
-				if (placeholderId != -1 && bank.contains(placeholderId))
-				{
-					return placeholderId;
-				}
-
-			}
-		}
-		return -1;
-	}
-
-	private int matchReal(Set<Integer> bank, int itemId)
+	private int matchReal(Set<Integer> bank, int itemId, boolean strict)
 	{
 		int exact = matchExact(bank, itemId);
 		if (exact != -1)
@@ -711,16 +678,25 @@ public class LayoutManager
 			return exact;
 		}
 
-		int variant = matchesVariantExact(bank, itemId);
-		if (variant != -1)
+		if (!strict)
 		{
-			return variant;
+			int variant = matchesVariantExact(bank, itemId);
+			if (variant != -1)
+			{
+				return variant;
+			}
 		}
 
-		return potionStorage.matches(bank, itemId);
+		int potion = potionStorage.matches(bank, itemId);
+		if (potion != -1 && (!strict || potion == itemId))
+		{
+			return potion;
+		}
+
+		return -1;
 	}
 
-	private int matchAnyPlaceholder(Set<Integer> bank, int itemId)
+	private int matchAnyPlaceholder(Set<Integer> bank, int itemId, boolean strict)
 	{
 		int placeholder = matchPlaceholder(bank, itemId);
 		if (placeholder != -1)
@@ -728,7 +704,8 @@ public class LayoutManager
 			return placeholder;
 		}
 
-		return matchesVariantPlaceholder(bank, itemId);
+		// Match placeholders by exact item id only (same behavior as upstream layout matching).
+		return -1;
 	}
 
 	private int matchesVariantExact(Set<Integer> bank, int itemId)
@@ -747,23 +724,6 @@ public class LayoutManager
 		return -1;
 	}
 
-	private int matchesVariantPlaceholder(Set<Integer> bank, int itemId)
-	{
-		int baseId = ItemVariationMapping.map(itemId);
-		if (baseId != itemId)
-		{
-			for (int variationId : ItemVariationMapping.getVariations(baseId))
-			{
-				ItemComposition config = itemManager.getItemComposition(variationId);
-				int placeholderId = config.getPlaceholderId();
-				if (placeholderId != -1 && bank.contains(placeholderId))
-				{
-					return placeholderId;
-				}
-			}
-		}
-		return -1;
-	}
 
 	private void removeObjvarPlaceholder(Set<Integer> bankItems, int matchedId)
 	{
@@ -778,19 +738,10 @@ public class LayoutManager
 	private void removeAllCandidateReals(Set<Integer> bankItems, int candidate)
 	{
 		bankItems.remove(candidate);
-
-		int baseId = ItemVariationMapping.map(candidate);
-		if (baseId != candidate)
-		{
-			for (int variationId : ItemVariationMapping.getVariations(baseId))
-			{
-				bankItems.remove(variationId);
-			}
-		}
 	}
 
 	private void removeAllCandidatePlaceholders(Set<Integer> bankItems, int candidate, Set<Integer> bankItemsAll,
-		Map<Integer, Integer> placeholderMatchCache)
+		Map<Long, Integer> placeholderMatchCache)
 	{
 		// Direct placeholder
 		ItemComposition config = itemManager.getItemComposition(candidate);
@@ -798,21 +749,6 @@ public class LayoutManager
 		if (placeholderId != -1)
 		{
 			bankItems.remove(placeholderId);
-		}
-
-		// Variation placeholders
-		int baseId = ItemVariationMapping.map(candidate);
-		if (baseId != candidate)
-		{
-			for (int variationId : ItemVariationMapping.getVariations(baseId))
-			{
-				ItemComposition v = itemManager.getItemComposition(variationId);
-				int vPlaceholderId = v.getPlaceholderId();
-				if (vPlaceholderId != -1)
-				{
-					bankItems.remove(vPlaceholderId);
-				}
-			}
 		}
 	}
 
@@ -949,8 +885,70 @@ public class LayoutManager
 		}
 	}
 
-	void onMenuOptionClicked(MenuOptionClicked event)
+	
+	private boolean swapFirstCandidateSegments(Layout l, int pos)
 	{
+		int[] candidates = l.getItemsAtPos(pos);
+		if (candidates == null || candidates.length < 2)
+		{
+			return false;
+		}
+
+		// Segment 1: consecutive items that are all variations of the first candidate.
+		int base1 = ItemVariationMapping.map(candidates[0]);
+		int i = 1;
+		while (i < candidates.length && ItemVariationMapping.map(candidates[i]) == base1)
+		{
+			++i;
+		}
+		if (i >= candidates.length)
+		{
+			return false;
+		}
+
+		// Segment 2: consecutive items that are all variations of the next candidate.
+		int base2 = ItemVariationMapping.map(candidates[i]);
+		int j = i + 1;
+		while (j < candidates.length && ItemVariationMapping.map(candidates[j]) == base2)
+		{
+			++j;
+		}
+
+		int[] out = new int[candidates.length];
+		int k = 0;
+		System.arraycopy(candidates, i, out, k, j - i);
+		k += (j - i);
+		System.arraycopy(candidates, 0, out, k, i);
+		k += i;
+		System.arraycopy(candidates, j, out, k, candidates.length - j);
+
+		l.setItemsAtPos(out, pos);
+		return true;
+	}
+
+void onMenuOptionClicked(MenuOptionClicked event)
+	{
+		// Ctrl+click swaps the first candidate segment with the one behind it.
+		if (event.getParam1() == InterfaceID.Bankmain.ITEMS && plugin.getActiveLayout() != null
+			&& client.isKeyPressed(KeyCode.KC_CONTROL))
+		{
+			final MenuEntry menu = event.getMenuEntry();
+			final Widget w = menu.getWidget();
+			if (w != null && w.getId() == InterfaceID.Bankmain.ITEMS)
+			{
+				final Layout l = plugin.getActiveLayout();
+				final int pos = w.getIndex();
+				if (swapFirstCandidateSegments(l, pos))
+				{
+					saveLayout(l);
+					bankSearch.layoutBank();
+				}
+			}
+
+			event.consume();
+			return;
+		}
+
 		// Update widget index of the menu so withdraws work in laid out tabs.
 		if (event.getParam1() == InterfaceID.Bankmain.ITEMS && plugin.getActiveLayout() != null)
 		{

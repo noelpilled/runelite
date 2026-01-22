@@ -27,7 +27,6 @@ package net.runelite.client.plugins.banktags.tabs;
 
 import java.util.Arrays;
 import lombok.Getter;
-import lombok.NonNull;
 
 public class Layout
 {
@@ -47,7 +46,7 @@ public class Layout
 		this.layout = new int[0][];
 	}
 
-	public Layout(String tag, @NonNull int[][] layout)
+	public Layout(String tag, int[][] layout)
 	{
 		this.tag = tag;
 		this.layout = cloneLayout(layout);
@@ -98,14 +97,13 @@ public class Layout
 		}
 		else if (pos >= layout.length)
 		{
-			int[][] n = Arrays.copyOf(layout, pos + 1);
-			layout = n;
+			layout = Arrays.copyOf(layout, pos + 1);
 		}
 
 		layout[pos] = itemId == -1 ? null : new int[]{itemId};
 	}
 
-	public void setItemsAtPos(@NonNull int[] itemIds, int pos)
+	public void setItemsAtPos(int[] itemIds, int pos)
 	{
 		if (pos < 0)
 		{
@@ -217,56 +215,6 @@ public class Layout
 	}
 
 	/**
-	 * Insert {@code itemId} into the candidate list at {@code pos} before {@code insertIdx}.
-	 * <p>
-	 * If {@code itemId} already exists in the list, it is moved to the new position.
-	 */
-	public void insertItemBeforeIndexAtPos(int itemId, int pos, int insertIdx)
-	{
-		if (itemId == -1 || pos < 0)
-		{
-			return;
-		}
-
-		if (layout == null)
-		{
-			layout = new int[pos + 1][];
-		}
-		else if (pos >= layout.length)
-		{
-			layout = Arrays.copyOf(layout, pos + 1);
-		}
-
-		int[] v = layout[pos];
-		if (v == null || v.length == 0)
-		{
-			layout[pos] = new int[]{itemId};
-			return;
-		}
-
-		int len = v.length;
-		insertIdx = Math.max(0, Math.min(insertIdx, len));
-
-		int existingIdx = indexOf(v, itemId);
-		if (existingIdx != -1)
-		{
-			// Remove it first; insertion index shifts left if the removed element was before the target.
-			if (existingIdx < insertIdx)
-			{
-				insertIdx--;
-			}
-			len--;
-		}
-
-		int[] base = (existingIdx == -1) ? v : removeAtIndex(v, existingIdx);
-		int[] n = new int[len + 1];
-		System.arraycopy(base, 0, n, 0, insertIdx);
-		n[insertIdx] = itemId;
-		System.arraycopy(base, insertIdx, n, insertIdx + 1, base.length - insertIdx);
-		layout[pos] = n;
-	}
-
-	/**
 	 * Add {@code itemId} as the highest-priority candidate for {@code pos}.
 	 *
 	 * If {@code itemId} is already present in the candidate list, it is moved to the front.
@@ -300,22 +248,42 @@ public class Layout
 			return;
 		}
 
-		int[] n;
 		if (idx == -1)
 		{
-			n = new int[v.length + 1];
+			int[] n = new int[v.length + 1];
 			n[0] = itemId;
 			System.arraycopy(v, 0, n, 1, v.length);
+			layout[pos] = n;
 		}
 		else
 		{
-			n = new int[v.length];
+			int[] n = new int[v.length];
 			n[0] = itemId;
 			System.arraycopy(v, 0, n, 1, idx);
 			System.arraycopy(v, idx + 1, n, idx, v.length - idx - 1);
+			layout[pos] = n;
+		}
+	}
+
+	/**
+	 * Swap the first two candidates at {@code pos}.
+	 */
+	public void swapTwoItemPriorityAtPos(int pos)
+	{
+		if (pos < 0 || pos >= layout.length)
+		{
+			return;
 		}
 
-		layout[pos] = n;
+		int[] v = layout[pos];
+		if (v == null || v.length < 2)
+		{
+			return;
+		}
+
+		int t = v[0];
+		v[0] = v[1];
+		v[1] = t;
 	}
 
 	private static int[] removeAtIndex(int[] arr, int idx)
