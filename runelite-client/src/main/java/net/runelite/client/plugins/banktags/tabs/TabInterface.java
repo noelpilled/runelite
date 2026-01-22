@@ -54,12 +54,14 @@ import net.runelite.api.Client;
 import net.runelite.api.Constants;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.Point;
 import net.runelite.api.KeyCode;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.ScriptEvent;
 import net.runelite.api.ScriptID;
 import net.runelite.api.SoundEffectID;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.DraggingWidgetChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
@@ -92,6 +94,7 @@ import net.runelite.client.plugins.banktags.TagManager;
 import net.runelite.client.ui.JagexColors;
 import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.Text;
+import net.runelite.client.game.ItemVariationMapping;
 
 @Singleton
 @Slf4j
@@ -174,6 +177,20 @@ public class TabInterface
 	private Widget upButton;
 	private Widget downButton;
 	private Widget newTab;
+
+	// Shift-drag visual override for multi-item layout slots.
+	// When Shift is held while dragging a multi-slot, show the highest-priority candidate under the cursor.
+	private Widget shiftDragWidget;
+	private int shiftDragOriginalItemId;
+	private int shiftDragOriginalQuantity;
+	private boolean shiftDragOverrideApplied;
+
+	// Ctrl-hover visual hint for multi-item layout slots.
+	// While Ctrl is held over a multi-slot, show the highest-priority candidate in that slot.
+	private Widget ctrlHoverWidget;
+	private int ctrlHoverOriginalItemId;
+	private int ctrlHoverOriginalQuantity;
+	private boolean ctrlHoverOverrideApplied;
 
 	@Inject
 	private TabInterface(
@@ -303,6 +320,8 @@ public class TabInterface
 	{
 		if (event.getGroupId() == InterfaceID.BANKMAIN && event.isUnload())
 		{
+			clearShiftDragOverride();
+			clearCtrlHoverOverride();
 			enabled = false;
 			upButton = downButton = newTab = scrollComponent = parent = null;
 			activeTag = null;
@@ -312,6 +331,13 @@ public class TabInterface
 			tagTabActive = false;
 			tagTabFirstChildIdx = -1;
 		}
+	}
+
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		updateShiftDragOverride();
+		updateCtrlHoverOverride();
 	}
 
 	private void init()
@@ -784,7 +810,7 @@ public class TabInterface
 			int index = event.getOption().equals("Examine") ? -1 : -2;
 			if (activeLayout != null)
 			{
-				client.createMenuEntry(index)
+				client.getMenu().createMenuEntry(index)
 					.setParam0(event.getActionParam0())
 					.setParam1(event.getActionParam1())
 					.setTarget(event.getTarget())
@@ -797,7 +823,7 @@ public class TabInterface
 
 			if (activeLayout != null && activeLayout.count(itemManager.canonicalize(event.getItemId())) > 1)
 			{
-				client.createMenuEntry(index)
+				client.getMenu().createMenuEntry(index)
 					.setParam0(event.getActionParam0())
 					.setParam1(event.getActionParam1())
 					.setTarget(event.getTarget())
@@ -809,7 +835,7 @@ public class TabInterface
 			else
 			{
 				boolean hidden = tagManager.isHidden(activeTag);
-				client.createMenuEntry(-1)
+				client.getMenu().createMenuEntry(-1)
 					.setParam0(event.getActionParam0())
 					.setParam1(event.getActionParam1())
 					.setTarget(event.getTarget())
@@ -869,6 +895,38 @@ public class TabInterface
 			}
 		}
 
+
+
+		// Ctrl-hover visual hint: while Ctrl is held over a multi-item layout slot, show the front item.
+		if (activeLayout != null && client.isKeyPressed(KeyCode.KC_CONTROL) && client.getMouseCurrentButton() == 0)
+		{
+			if (event.getActionParam1() == InterfaceID.Bankmain.ITEMS)
+			{
+				int idx = event.getActionParam0();
+				int[] candidates = activeLayout.getItemsAtPos(idx);
+				if (candidates != null && candidates.length > 1 && candidates[0] > 0)
+				{
+					Widget items = client.getWidget(InterfaceID.Bankmain.ITEMS);
+					if (items != null)
+					{
+						Widget w = items.getChild(idx);
+						if (w != null)
+						{
+							applyCtrlHoverOverride(w, candidates[0]);
+						}
+					}
+				}
+				else
+				{
+					clearCtrlHoverOverride();
+				}
+			}
+			else
+			{
+				clearCtrlHoverOverride();
+			}
+		}
+
 		layoutManager.onMenuEntryAdded(event, this);
 	}
 
@@ -905,9 +963,93 @@ public class TabInterface
 			}
 		}
 
-		MenuEntry menuEntry = event.getMenuEntry();
+
+		// Ctrl-click: heuristically toggle a base item vs a variant-stack block.
+		// If the list looks like [base | v1 | v2 | ...] where v1..vn share a variation group,
+		// ctrl-click toggles between [base | variants...] and [variants... | base]. Otherwise it swaps the first two.
+		if (activeLayout != null
+			&& event.getParam1() == InterfaceID.Bankmain.ITEMS
+			&& client.isKeyPressed(KeyCode.KC_CONTROL))
+		{
+			String opt = event.getMenuOption();
+			if (opt != null && (opt.startsWith("Withdraw") || opt.startsWith("Deposit") || opt.equals("Release")))
+			{
+				int pos = event.getParam0();
+				int[] ids = activeLayout.getItemsAtPos(pos);
+				if (ids != null && ids.length > 1)
+				{
+					clearCtrlHoverOverride();
+
+					int[] reordered = null;
+					if (ids.length >= 3)
+					{
+						// Pattern A: base is first, variants share the group of ids[1]
+						int gBase = ItemVariationMapping.map(ids[0]);
+						int gVar = ItemVariationMapping.map(ids[1]);
+						if (gBase != gVar)
+						{
+							boolean allVarsSame = true;
+							for (int i = 2; i < ids.length; i++)
+							{
+								if (ItemVariationMapping.map(ids[i]) != gVar)
+								{
+									allVarsSame = false;
+									break;
+								}
+							}
+							if (allVarsSame)
+							{
+								reordered = new int[ids.length];
+								System.arraycopy(ids, 1, reordered, 0, ids.length - 1);
+								reordered[ids.length - 1] = ids[0];
+							}
+						}
+						// Pattern B: base is last, variants share the group of ids[0]
+						if (reordered == null)
+						{
+							int gVarFirst = ItemVariationMapping.map(ids[0]);
+							int gLast = ItemVariationMapping.map(ids[ids.length - 1]);
+							if (gVarFirst != gLast)
+							{
+								boolean allVarsSame = true;
+								for (int i = 1; i < ids.length - 1; i++)
+								{
+									if (ItemVariationMapping.map(ids[i]) != gVarFirst)
+									{
+										allVarsSame = false;
+										break;
+									}
+								}
+								if (allVarsSame)
+								{
+									reordered = new int[ids.length];
+									reordered[0] = ids[ids.length - 1];
+									System.arraycopy(ids, 0, reordered, 1, ids.length - 1);
+								}
+							}
+						}
+					}
+
+					if (reordered != null)
+					{
+						activeLayout.setItemsAtPos(reordered, pos);
+					}
+					else
+					{
+						// Default: swap-next (first two candidates)
+						activeLayout.swapTwoItemPriorityAtPos(pos);
+					}
+
+					layoutManager.saveLayout(activeLayout);
+					bankSearch.layoutBank();
+					event.consume();
+					return;
+				}
+			}
+		}
+
 		if (event.getMenuOption().startsWith("View tab") || event.getMenuOption().equals("View all items")
-			|| (menuEntry.getType() == MenuAction.CC_OP && menuEntry.getParam1() == InterfaceID.Bankmain.POTIONSTORE_BUTTON))
+			|| (event.getMenuEntry().getType() == MenuAction.CC_OP && event.getMenuEntry().getParam1() == InterfaceID.Bankmain.POTIONSTORE_BUTTON))
 		{
 			closeTag(false);
 		}
@@ -926,6 +1068,13 @@ public class TabInterface
 	{
 		if (!enabled)
 		{
+			return;
+		}
+
+		if (!event.isDraggingWidget())
+		{
+			// Drag ended; make sure we restore any shift-drag visual override.
+			clearShiftDragOverride();
 			return;
 		}
 
@@ -951,6 +1100,7 @@ public class TabInterface
 		// is dragging widget and mouse button released
 		if (client.getMouseCurrentButton() == 0)
 		{
+			clearShiftDragOverride();
 			if (!tagTabActive
 				&& draggedWidget.getId() == InterfaceID.Bankmain.ITEMS
 				&& draggedWidget.getItemId() != -1
@@ -977,7 +1127,7 @@ public class TabInterface
 		}
 		else if (draggedWidget.getItemId() != -1)
 		{
-			MenuEntry[] entries = client.getMenuEntries();
+			MenuEntry[] entries = client.getMenu().getMenuEntries();
 
 			if (entries.length > 0)
 			{
@@ -1421,7 +1571,7 @@ public class TabInterface
 
 	private void createMenuEntry(MenuEntryAdded event, String option, String target)
 	{
-		client.createMenuEntry(-1)
+		client.getMenu().createMenuEntry(-1)
 			.setParam0(event.getActionParam0())
 			.setParam1(event.getActionParam1())
 			.setTarget(target)
@@ -1436,5 +1586,184 @@ public class TabInterface
 			.type(ChatMessageType.CONSOLE)
 			.runeLiteFormattedMessage(message)
 			.build());
+	}
+
+	private void updateShiftDragOverride()
+	{
+		// Only relevant when we are in a layout tab.
+		if (!enabled || activeLayout == null)
+		{
+			clearShiftDragOverride();
+			return;
+		}
+
+		Widget draggedWidget = client.getDraggedWidget();
+		if (draggedWidget == null || draggedWidget.getId() != InterfaceID.Bankmain.ITEMS)
+		{
+			clearShiftDragOverride();
+			return;
+		}
+
+
+		// Only override while actively dragging (mouse button held).
+		if (client.getMouseCurrentButton() == 0)
+		{
+			clearShiftDragOverride();
+			return;
+		}
+		boolean shiftDown = client.isKeyPressed(KeyCode.KC_SHIFT);
+		int idx = draggedWidget.getIndex();
+		int[] candidates = activeLayout.getItemsAtPos(idx);
+		if (!shiftDown || candidates == null || candidates.length <= 1)
+		{
+			clearShiftDragOverride();
+			return;
+		}
+
+		int desiredItemId = candidates[0];
+		if (desiredItemId <= 0)
+		{
+			clearShiftDragOverride();
+			return;
+		}
+
+		// Capture original widget values the first time we apply the override (or if the dragged widget changed).
+		if (shiftDragWidget != draggedWidget)
+		{
+			clearShiftDragOverride();
+			shiftDragWidget = draggedWidget;
+			shiftDragOriginalItemId = draggedWidget.getItemId();
+			shiftDragOriginalQuantity = draggedWidget.getItemQuantity();
+		}
+
+		if (!shiftDragOverrideApplied || draggedWidget.getItemId() != desiredItemId)
+		{
+			draggedWidget.setItemId(desiredItemId);
+			int qty = getShiftDragDisplayQuantity(desiredItemId, shiftDragOriginalItemId, shiftDragOriginalQuantity);
+			draggedWidget.setItemQuantity(qty);
+			shiftDragOverrideApplied = true;
+			draggedWidget.revalidate();
+		}
+	}
+
+
+	/**
+	 * Decide what quantity to show on the dragged icon while Shift is held.
+	 * - If we're not changing the item id, keep the original quantity.
+	 * - If we are changing it, show the bank quantity for that exact item id if available.
+	 *   Otherwise show 1 (which hides the quantity text).
+	 */
+	private int getShiftDragDisplayQuantity(int desiredItemId, int originalItemId, int originalQty)
+	{
+		if (desiredItemId == originalItemId)
+		{
+			return originalQty;
+		}
+
+		ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+		if (bank != null)
+		{
+			for (Item item : bank.getItems())
+			{
+				if (item.getId() == desiredItemId)
+				{
+					int q = item.getQuantity();
+					return q > 0 ? q : 1;
+				}
+			}
+		}
+
+		// Not present (or unknown): hide the quantity.
+		return 1;
+	}
+
+	private void clearShiftDragOverride()
+	{
+		if (shiftDragWidget != null && shiftDragOverrideApplied)
+		{
+			shiftDragWidget.setItemId(shiftDragOriginalItemId);
+			shiftDragWidget.setItemQuantity(shiftDragOriginalQuantity);
+			shiftDragWidget.revalidate();
+		}
+
+		shiftDragWidget = null;
+		shiftDragOriginalItemId = 0;
+		shiftDragOriginalQuantity = 0;
+		shiftDragOverrideApplied = false;
+	}
+
+	private void updateCtrlHoverOverride()
+	{
+		// Clear any hover override if Ctrl isn't held, we're not in a layout tab, or we're dragging.
+		if (!enabled || activeLayout == null || !client.isKeyPressed(KeyCode.KC_CONTROL) || client.getMouseCurrentButton() != 0)
+		{
+			clearCtrlHoverOverride();
+			return;
+		}
+
+		// If the mouse moved off the overridden widget, clear so we don't leave a stale preview behind.
+		if (ctrlHoverWidget != null && ctrlHoverOverrideApplied)
+		{
+			Point mouse = client.getMouseCanvasPosition();
+			Point loc = ctrlHoverWidget.getCanvasLocation();
+			if (mouse == null || loc == null)
+			{
+				clearCtrlHoverOverride();
+				return;
+			}
+
+			int mx = mouse.getX();
+			int my = mouse.getY();
+			int x = loc.getX();
+			int y = loc.getY();
+			int w = ctrlHoverWidget.getWidth();
+			int h = ctrlHoverWidget.getHeight();
+			if (mx < x || my < y || mx >= x + w || my >= y + h)
+			{
+				clearCtrlHoverOverride();
+			}
+		}
+	}
+
+	private void applyCtrlHoverOverride(Widget widget, int desiredItemId)
+	{
+		if (desiredItemId <= 0)
+		{
+			clearCtrlHoverOverride();
+			return;
+		}
+
+		// Capture original widget values when we start overriding, or when the hovered widget changes.
+		if (ctrlHoverWidget != widget)
+		{
+			clearCtrlHoverOverride();
+			ctrlHoverWidget = widget;
+			ctrlHoverOriginalItemId = widget.getItemId();
+			ctrlHoverOriginalQuantity = widget.getItemQuantity();
+		}
+
+		if (!ctrlHoverOverrideApplied || widget.getItemId() != desiredItemId)
+		{
+			widget.setItemId(desiredItemId);
+			int qty = getShiftDragDisplayQuantity(desiredItemId, ctrlHoverOriginalItemId, ctrlHoverOriginalQuantity);
+			widget.setItemQuantity(qty);
+			ctrlHoverOverrideApplied = true;
+			widget.revalidate();
+		}
+	}
+
+	private void clearCtrlHoverOverride()
+	{
+		if (ctrlHoverWidget != null && ctrlHoverOverrideApplied)
+		{
+			ctrlHoverWidget.setItemId(ctrlHoverOriginalItemId);
+			ctrlHoverWidget.setItemQuantity(ctrlHoverOriginalQuantity);
+			ctrlHoverWidget.revalidate();
+		}
+
+		ctrlHoverWidget = null;
+		ctrlHoverOriginalItemId = 0;
+		ctrlHoverOriginalQuantity = 0;
+		ctrlHoverOverrideApplied = false;
 	}
 }
