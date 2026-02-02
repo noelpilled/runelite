@@ -199,7 +199,7 @@ public class RuneLite
 
 	public static void main(String[] args) throws Exception
 	{
-		System.setProperty("runelite.pluginhub.version", "1.12.13"); // since we cant pass args through bolt
+		System.setProperty("runelite.pluginhub.version", "1.12.15"); // since we cant pass args through bolt
 		args = stripLauncherJvmArgs(args);
 		Locale.setDefault(Locale.ENGLISH);
 

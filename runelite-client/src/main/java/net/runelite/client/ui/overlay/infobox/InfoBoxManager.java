@@ -43,6 +43,7 @@ import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.MenuAction;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.eventbus.EventBus;
@@ -65,6 +66,17 @@ public class InfoBoxManager
 	private static final String INFOBOXOVERLAY_ORIENTATION_PREFIX = "orient_";
 	private static final String DEFAULT_LAYER = "InfoBoxOverlay";
 
+	// Optional global sort override for infoboxes. Stored in ConfigManager group "infobox", key "sortOrder".
+	// The value is a newline- or comma-separated list of entries. Each entry can be either:
+	//  - an exact key, e.g. "Timers and Buffs:DIVINE_SUPER_STRENGTH"
+	//  - a prefix match ending with '*', e.g. "Timers and Buffs:DIVINE_*"
+	// Entries are matched against, in order:
+	//  1) "<plugin name>:<infobox name>:<tooltip>" (when tooltip is present)
+	//  2) "<plugin name>:<infobox name>"
+	//  3) "<infobox name>"
+	private static final String INFOBOX_SORT_GROUP = "infobox";
+	private static final String INFOBOX_SORT_KEY = "sortOrder";
+
 	private static final String DETACH = "Detach";
 	private static final String FLIP = "Flip";
 	private static final String DELETE = "Delete";
@@ -82,6 +94,13 @@ public class InfoBoxManager
 	private final OverlayManager overlayManager;
 	private final ConfigManager configManager;
 
+	private final ClientThread clientThread;
+	private volatile boolean resortQueued = false;
+
+
+	private volatile List<String> sortOverride = Collections.emptyList();
+	private volatile boolean sortOverrideLoaded = false;
+
 	@Inject
 	private InfoBoxManager(
 		final RuneLiteConfig runeLiteConfig,
@@ -89,7 +108,8 @@ public class InfoBoxManager
 		final Client client,
 		final EventBus eventBus,
 		final OverlayManager overlayManager,
-		final ConfigManager configManager)
+		final ConfigManager configManager,
+		final ClientThread clientThread)
 	{
 		this.runeLiteConfig = runeLiteConfig;
 		this.tooltipManager = tooltipManager;
@@ -97,7 +117,9 @@ public class InfoBoxManager
 		this.eventBus = eventBus;
 		this.overlayManager = overlayManager;
 		this.configManager = configManager;
+		this.clientThread = clientThread;
 		eventBus.register(this);
+		// Sort override is loaded lazily to avoid early ConfigManager access during startup.
 	}
 
 	@Subscribe
@@ -106,6 +128,11 @@ public class InfoBoxManager
 		if (event.getGroup().equals("runelite") && event.getKey().equals("infoBoxSize"))
 		{
 			layers.values().forEach(l -> l.getInfoBoxes().forEach(this::updateInfoBoxImage));
+		}
+		else if (event.getGroup().equals(INFOBOX_SORT_GROUP) && event.getKey().equals(INFOBOX_SORT_KEY))
+		{
+			sortOverrideLoaded = reloadSortOverride();
+			scheduleResort();
 		}
 	}
 
@@ -168,11 +195,16 @@ public class InfoBoxManager
 		{
 			int idx = findInsertionIndex(overlay.getInfoBoxes(), infoBox, (b1, b2) -> ComparisonChain
 				.start()
+				.compare(getSortOverrideIndex(b1), getSortOverrideIndex(b2))
 				.compare(b1.getPriority(), b2.getPriority())
 				.compare(b1.getPlugin().getName(), b2.getPlugin().getName())
 				.result());
 			overlay.getInfoBoxes().add(idx, infoBox);
 		}
+
+		// If called off the client thread (eg from the config panel), avoid evaluating tooltips here.
+		// We schedule a resort on the client thread so tooltip-based matching/order can be applied safely.
+		scheduleResort();
 
 		BufferedImage image = infoBox.getImage();
 
@@ -395,6 +427,170 @@ public class InfoBoxManager
 	void unsetOrientation(String name)
 	{
 		configManager.unsetConfiguration(INFOBOXOVERLAY_KEY, INFOBOXOVERLAY_ORIENTATION_PREFIX + name);
+	}
+
+
+	private void ensureSortOverrideLoaded()
+	{
+		if (sortOverrideLoaded)
+		{
+			return;
+		}
+
+		sortOverrideLoaded = reloadSortOverride();
+	}
+
+	private boolean reloadSortOverride()
+	{
+		final String raw;
+		try
+		{
+			raw = configManager.getConfiguration(INFOBOX_SORT_GROUP, INFOBOX_SORT_KEY);
+		}
+		catch (RuntimeException ex)
+		{
+			// ConfigManager can be unavailable early during startup; default to no override.
+			sortOverride = Collections.emptyList();
+			return false;
+		}
+		if (Strings.isNullOrEmpty(raw))
+		{
+			sortOverride = Collections.emptyList();
+			return true;
+		}
+
+		final List<String> entries = new ArrayList<>();
+		// Support both newlines and commas as separators.
+		for (String part : raw.replace('\r', '\n').split("[,\n]"))
+		{
+			if (part == null)
+			{
+				continue;
+			}
+			String t = part.trim();
+			if (t.isEmpty() || t.startsWith("#"))
+			{
+				continue;
+			}
+			entries.add(t);
+		}
+		sortOverride = entries.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(entries);
+		return true;
+	}
+	private void scheduleResort()
+	{
+		// Ensure tooltip-based ordering (and any other potentially client-thread-dependent fields)
+		// are only evaluated on the client thread.
+		if (sortOverride.isEmpty())
+		{
+			return;
+		}
+
+		if (client.isClientThread())
+		{
+			resortAll();
+			return;
+		}
+
+		if (resortQueued)
+		{
+			return;
+		}
+
+		resortQueued = true;
+		clientThread.invokeLater(() ->
+		{
+			resortQueued = false;
+			resortAll();
+		});
+	}
+
+	private synchronized void resortAll()
+	{
+		if (layers.isEmpty())
+		{
+			return;
+		}
+
+		final Comparator<InfoBox> comparator = (b1, b2) -> ComparisonChain
+			.start()
+			.compare(getSortOverrideIndex(b1), getSortOverrideIndex(b2))
+			.compare(b1.getPriority(), b2.getPriority())
+			.compare(b1.getPlugin().getName(), b2.getPlugin().getName())
+			.result();
+
+		for (InfoBoxOverlay overlay : layers.values())
+		{
+			Collections.sort(overlay.getInfoBoxes(), comparator);
+		}
+	}
+
+	private int getSortOverrideIndex(final InfoBox box)
+	{
+		ensureSortOverrideLoaded();
+
+		final List<String> order = sortOverride;
+		if (order.isEmpty())
+		{
+			return Integer.MAX_VALUE;
+		}
+		final String pluginName = box.getPlugin().getName();
+		final String name = box.getName();
+		final String tooltip;
+		if (client.isClientThread())
+		{
+			String tt = null;
+			try
+			{
+				tt = box.getTooltip();
+			}
+			catch (RuntimeException ex)
+			{
+				// Some infobox implementations call client-thread-only APIs in getTooltip().
+				// If that happens, ignore tooltip for ordering; it will be re-evaluated on the client thread later.
+				log.debug("Infobox tooltip threw during sort key evaluation for {}:{}", pluginName, name, ex);
+			}
+			tooltip = tt;
+		}
+		else
+		{
+			tooltip = null;
+		}
+		final String key1 = pluginName + ":" + name;
+		final String key2 = Strings.isNullOrEmpty(tooltip) ? null : (key1 + ":" + tooltip);
+		// Some infobox implementations use internal names (eg enum constants) that are hard for users to guess.
+		// Allow matching against tooltip text as a more user-friendly key.
+		final String keyPluginTooltip = Strings.isNullOrEmpty(tooltip) ? null : (pluginName + ":" + tooltip);
+
+		for (int i = 0; i < order.size(); i++)
+		{
+			final String pat = order.get(i);
+			if (matches(pat, key2)
+				|| matches(pat, key1)
+				|| matches(pat, keyPluginTooltip)
+				|| matches(pat, tooltip)
+				|| matches(pat, name))
+			{
+				return i;
+			}
+		}
+		return Integer.MAX_VALUE;
+	}
+
+	private static boolean matches(final String pattern, final String key)
+	{
+		if (key == null)
+		{
+			return false;
+		}
+
+		if (pattern.endsWith("*"))
+		{
+			final String prefix = pattern.substring(0, pattern.length() - 1);
+			return key.startsWith(prefix);
+		}
+
+		return key.equals(pattern);
 	}
 
 	/**
