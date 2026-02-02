@@ -26,8 +26,8 @@
  */
 package net.runelite.client.plugins.banktags.tabs;
 
-import com.google.common.base.Strings;
 import com.google.common.util.concurrent.Runnables;
+import com.google.common.base.Strings;
 import java.awt.Color;
 import java.awt.Toolkit;
 import java.awt.datatransfer.DataFlavor;
@@ -945,6 +945,7 @@ public class TabInterface
 		layoutManager.saveLayout(activeLayout);
 		bankSearch.layoutBank();
 	}
+
 
 	@Subscribe(priority = -1)
 	public void onMenuOptionClicked(MenuOptionClicked event)
