@@ -415,13 +415,14 @@ public final class DBTableID
 			public static final int QUEST_EXISTENTIALCRISIS = 5192;
 			public static final int QUEST_IMPENDINGCHAOS = 5193;
 			public static final int MINIQUEST_VALETOTEMS = 5194;
-			public static final int MINIQUEST_TUTORIALISLAND = 7033;
 			public static final int QUEST_PANDEMONIUM = 7103;
 			public static final int QUEST_PRYINGTIMES = 7104;
 			public static final int QUEST_CURRENTAFFAIRS = 7105;
 			public static final int QUEST_TROUBLEDTORTUGANS = 7106;
 			public static final int QUEST_REDREEF = 7107;
 			public static final int QUEST_BURIALATSEA = 7108;
+			public static final int QUEST_LEARNINGTHEROPES = 9643;
+			public static final int QUEST_IDESOFMILK = 9645;
 		}
 	}
 
@@ -446,6 +447,7 @@ public final class DBTableID
 			public static final int XMAS_2025 = 4968;
 			public static final int EASTER_2025 = 5107;
 			public static final int HALLOWEEN_2025 = 6989;
+			public static final int BIRTHDAY_2026 = 7033;
 		}
 	}
 
@@ -4958,39 +4960,44 @@ public final class DBTableID
 		public static final int COL_VARIABLE = 5;
 
 		/**
-		 * integer
+		 * boolean
 		 */
-		public static final int COL_AREA = 6;
+		public static final int COL_AUTOMATIC_UNLOCK = 6;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_AREA_DEFAULT = 7;
+		public static final int COL_AREA = 7;
+
+		/**
+		 * integer
+		 */
+		public static final int COL_AREA_DEFAULT = 8;
 
 		/**
 		 * boolean
 		 */
-		public static final int COL_HIDDEN = 8;
+		public static final int COL_HIDDEN = 9;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_HOLIDAY = 9;
+		public static final int COL_HOLIDAY = 10;
 
 		/**
 		 * dbrow
 		 */
-		public static final int COL_SECONDARY_TRACK = 10;
+		public static final int COL_SECONDARY_TRACK = 11;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_RELEASE_TYPE = 11;
+		public static final int COL_RELEASE_TYPE = 12;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_RELATED_CONTENT = 12;
+		public static final int COL_RELATED_CONTENT = 13;
 
 		public static final class Row
 		{
@@ -5845,6 +5852,7 @@ public final class DBTableID
 			public static final int MUSIC_GREAT_CONCH_2 = 7094;
 			public static final int MUSIC_GREAT_CONCH_UNDERGROUND = 7095;
 			public static final int MUSIC_SCAPE_SAIL = 7096;
+			public static final int MUSIC_BRUTUS_COW_BOSS = 8662;
 		}
 	}
 
@@ -6921,6 +6929,7 @@ public final class DBTableID
 			public static final int HISCORES_BOSSES_YAMA = 5130;
 			public static final int HISCORES_BOSSES_DOOM_OF_MOKHAIOTL = 5484;
 			public static final int HISCORES_BOSSES_GRYPHON_BOSS = 9447;
+			public static final int HISCORES_BOSSES_COWBOSS = 9655;
 		}
 	}
 
@@ -7261,6 +7270,7 @@ public final class DBTableID
 			public static final int CHARGES_EYE_OF_AYAK_RUNES = 5188;
 			public static final int CHARGES_HORN_OF_PLENTY = 7039;
 			public static final int CHARGES_SAILORS_AMULET = 7040;
+			public static final int CHARGES_COWBELL_AMULET = 9644;
 		}
 	}
 
@@ -9170,6 +9180,7 @@ public final class DBTableID
 			public static final int POH_TROPHY_HALIBUT = 7125;
 			public static final int POH_TROPHY_BLUEFIN = 7126;
 			public static final int POH_TROPHY_MARLIN = 7127;
+			public static final int POH_GARDEN_CENTREPIECE_6 = 9654;
 		}
 	}
 
@@ -10860,6 +10871,14 @@ public final class DBTableID
 			public static final int CATHERBY_TELEPORT = 7021;
 			public static final int GHORROCK_TELEPORT = 7022;
 			public static final int CARRALLANGAR_TELEPORT = 7023;
+			public static final int TROLLHEIM_TELEPORT = 9646;
+			public static final int PADDEWWA_TELEPORT = 9647;
+			public static final int LASSAR_TELEPORT = 9648;
+			public static final int DAREEYAK_TELEPORT = 9649;
+			public static final int OURANIA_TELEPORT = 9650;
+			public static final int BARBARIAN_TELEPORT = 9651;
+			public static final int KHAZARD_TELEPORT = 9652;
+			public static final int ICEPLATEAU_TELEPORT = 9653;
 		}
 	}
 
@@ -12994,37 +13013,32 @@ public final class DBTableID
 		/**
 		 * integer
 		 */
-		public static final int COL_BOAT_CARGOHOLD_SIZE_UIM = 29;
+		public static final int COL_BOAT_FETID_WATER_RESISTANT = 29;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_BOAT_FETID_WATER_RESISTANT = 30;
+		public static final int COL_BOAT_CRYSTAL_FLECKED_RESISTANT = 30;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_BOAT_CRYSTAL_FLECKED_RESISTANT = 31;
+		public static final int COL_BOAT_TANGLED_KELP_RESISTANT = 31;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_BOAT_TANGLED_KELP_RESISTANT = 32;
+		public static final int COL_BOAT_ICY_SEAS_RESISTANT = 32;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_BOAT_ICY_SEAS_RESISTANT = 33;
+		public static final int COL_BOAT_MAX_WIND_MOTES = 33;
 
 		/**
 		 * integer
 		 */
-		public static final int COL_BOAT_MAX_WIND_MOTES = 34;
-
-		/**
-		 * integer
-		 */
-		public static final int COL_BOAT_ADDITIONAL_RECOVERY_COST_PERCENTAGE = 35;
+		public static final int COL_BOAT_ADDITIONAL_RECOVERY_COST_PERCENTAGE = 34;
 
 		public static final class Row
 		{
@@ -14872,8 +14886,6 @@ public final class DBTableID
 			public static final int SAILING_NPC_BOAT_BT_TRIAL_MASTER_3_BOAT = 8658;
 			public static final int SAILING_NPC_BOAT_TROUBLED_TORTUGANS_RED_REEF = 8659;
 			public static final int SAILING_NPC_BOAT_RED_REEF_ZENITH = 8660;
-			public static final int SAILING_NPC_BOAT_DYNAMIC_1 = 8661;
-			public static final int SAILING_NPC_BOAT_DYNAMIC_2 = 8662;
 		}
 	}
 
@@ -16208,6 +16220,16 @@ public final class DBTableID
 			public static final int DEADMANSKULL_INTERFACE_TAB_PERMANENT = 9638;
 			public static final int DEADMANSKULL_INTERFACE_TAB_TOGGLE = 9639;
 			public static final int DEADMANSKULL_INTERFACE_TAB_ATTUNE = 9640;
+		}
+	}
+
+	public static final class CowbossScenerynpcs
+	{
+		public static final int ID = 211;
+
+		public static final class Row
+		{
+			public static final int COWBOSS_SCENERYNPCS = 8661;
 		}
 	}
 /* This file is automatically generated. Do not edit. */
